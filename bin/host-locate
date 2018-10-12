@@ -1,0 +1,100 @@
+#!/usr/bin/env ruby
+# -*- encoding: utf-8 -*-
+
+$:.unshift (File.dirname(File.realpath(__FILE__)) + '/../').untaint
+
+Encoding.default_external = 'utf-8'
+
+require 'config/config'
+require 'lib/iptable'
+require 'lib/locate'
+
+$progname = File.basename(__FILE__)
+
+def usage(errmsg = nil)
+	puts "ERROR: #{errmsg}" if errmsg
+	puts <<~EOF
+	Usage:
+		#{$progname} <address> [<date> [<time>]]
+	Description:
+		locate a host using MongoDB or ARP/MAC table and LLDP/CDP.
+	Argument:
+ <IP address or MAC address>: an IP address or MAC address of a host.
+	   <date> and <time>: date and time when the host accessed.
+	                      current time is used if omitted.
+			      when ``-1'' is specified as date, all entries
+			      are examined.
+	EOF
+	exit 1
+end
+
+usage('no IP address specified') if ARGV.size < 1
+now = Time.now
+addr = ARGV.shift
+usage if addr === '-h'
+case ARGV.size
+when 0
+	time = now
+when 1
+	if ARGV.shift === '-1'
+		time = nil
+	else
+		time = Time.parse(ARGV.shift)
+	end
+when 2
+	time = Time.parse("#{ARGV[0]} #{ARGV[1]}")
+else
+	usage('invalid date or time format')
+end
+usage('future time specified') if time && time > now
+
+iptable = IPTable.new
+if addr =~ /^[0-9\.]+$/ # XXX
+	r = iptable.lookup(addr)
+	raise 'Unregistered IP address' if ! r
+	media = r.media
+end
+
+case media
+when '無線'
+	cmds = [ 'wireless' ]
+when '有線'
+	cmds = [ 'wired', 'wireless' ]
+else
+	# precede wireless LAN because wired LAN may detect a host on WLC.
+	cmds = [ 'wireless', 'wired' ]
+	puts "WARNING: unknown media of network: #{media}"
+end
+
+l = nil
+cmds.each do |c|
+	l = Locate::Locate.new(c.capitalize, addr, time)
+	l.locate
+	if l.located?
+		break
+	end
+end
+raise 'No address found' if ! l.located?
+
+r = iptable.lookup(l.ia)
+puts l.output
+puts <<EOF
+           Media: #{r.media}
+            Type: #{r.type ? r.type.name : nil}
+      Department: #{r.contact} #{r.division} #{r.section}
+         Contact: #{r.contact ? r.contact.mailaddrs.join(', ') : '' }
+EOF
+
+exit if l.userid
+
+#
+puts "\nUser candidates:"
+[ :idp, :dovecot, :garoon ].each do |method|
+	begin
+		users = ::SOC::Mongo.send(method.to_s, l.ia, time)
+		users.each do |u|
+			puts "#{u.lastseentime} #{u.id} (#{method})"
+		end
+	rescue RuntimeError
+	end
+end

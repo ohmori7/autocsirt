@@ -1,0 +1,72 @@
+#
+DEBUG = false if ! defined?(DEBUG)
+
+#
+SUBJECT_PREFIX = '動作テスト: ' if DEBUG
+
+# SOC services and their mail addresses
+SOCS = {
+	nii:	'soc-support@nii.ac.jp',
+	ntt:	'hogehoge@hogehoge',
+}
+
+# automatically confine on a report from NII-SOCS?
+NII_SOCS_CONFINEMENT = false
+# NII-SOCS protal site configuration
+NII_SOCS_USERNAME = 'user0'
+NII_SOCS_PASSWORD = 'password0'
+NII_SOCS_CLIENT_CERTIFICATE = '/home/hogehoge/nii-socs-smime-without-ca.pem'
+NII_SOCS_CLIENT_KEY = '/home/hogehoge/nii-socs-smime-key-without-pass.pem'
+
+# Received mail box configuration
+IMAP_HOST = 'soc.hogehoge'
+IMAP_USERNAME = 'soc@soc.hogehoge'
+IMAP_PASSWORD = 'password'
+#IMAP_SSL = true
+IMAP_SSL = false
+
+# Redmine configuration
+REDMINE_PROJECT = 'incidents'	# project identifier, not name
+if DEBUG
+	# test environment
+	REDMINE_URL = 'https://10.0.0.1'
+	REDMINE_APIKEY = '1111111111111111111111111111111111111111'
+	REDMINE_WATCHER_GROUP = 'テストグループ'
+	REDMINE_KEY_PREFIX = 'IR:'
+else
+	# production environment
+	REDMINE_URL = 'https://incident.hogehoge'
+	REDMINE_APIKEY = '2222222222222222222222222222222222222222'
+	REDMINE_WATCHER_GROUP = 'CSIRT'
+end
+
+# override an IP address of an infected host for test purpose
+#OVERRIDE_IP_ADDRESS = '192.168.0.1' if DEBUG # confinement success
+#OVERRIDE_IP_ADDRESS = '192.168.0.2' if DEBUG # confinement fail
+
+# Definition of IP addresses in an organization.
+INTERNAL_IP_ADDRESSES = [ '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16' ]
+
+# Confinement configuration
+#CONFINEMENT_DRY_RUN = true if DEBUG
+# ACL type: ip, mac or advance
+CONFINEMENT_ACL_TYPE = 'advance'
+# ACL type can be defined per switch basis.
+CONFINEMENT_ACL_NAME = 'INCIDENT-FILTER'
+
+# Notification mail configuration
+if DEBUG
+	ALERT_TO = 'hogehoge@hogehoge'
+	ALERT_CC = 'hogehoge@hogehoge'
+end
+ALERT_TEMPLATE = 'alert-template.txt'
+ALERT_SMTP_SERVER = 'smtp.hogehoge'
+
+# Report mail configuration
+REPORT_TEMPLATE = 'report-template.txt'
+REPORT_SMTP_SERVER = 'smtp.hogehoge'
+
+# Database files
+CONTACT = 'csirt.csv'
+IPADDRESS = 'ipaddress.csv'
+IPADDRESSTYPE = 'ipaddresstype.csv'

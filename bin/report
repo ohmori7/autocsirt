@@ -1,0 +1,489 @@
+#!/usr/bin/env ruby
+# -*- encoding: utf-8 -*-
+
+$:.unshift (File.dirname(File.realpath(__FILE__)) + '/../').untaint
+
+Encoding.default_external = 'utf-8'
+
+require 'time'
+require 'prawn'
+require 'prawn/table'
+require 'csv'
+
+require 'lib/redmine/api'
+require 'lib/issue'
+require 'lib/templatemailer'
+
+class IncidentReport
+	FISCAL_YEAR_DAY_OFFSET = 7
+	FISCAL_YEAR_MONTH = 4
+	MONTH_MAX = 12
+
+	attr_reader :fiscal_year
+
+	def initialize(title, ititle)
+		@issues = []
+		@title = title
+		@rows = []
+		@ititle = ititle
+		@irows = []
+		@month = FISCAL_YEAR_MONTH
+		@options = {
+			page_layout: :landscape,
+			margin:	20,
+		}
+
+		today = Date.today
+		@fiscal_year = today.year
+		if today.month < @month ||
+		   (today.month == @month && today.day < FISCAL_YEAR_DAY_OFFSET)
+			@fiscal_year -= 1
+		end
+
+		@path = File.expand_path(File.dirname(__FILE__) + '/../').untaint
+	end
+
+	def year
+		y = @fiscal_year
+		y += 1 if month < FISCAL_YEAR_MONTH
+		y
+	end
+
+	def month
+		((@month - 1) % MONTH_MAX) + 1
+	end
+
+	def start_date
+		sprintf('%d-%02d-01', year, month)
+	end
+
+	def end_date
+		date = Date.new(@fiscal_year, month, -1)
+		sprintf('%d-%02d-%02d', year, month, date.day)
+	end
+
+	def add_issue(issue)
+		@issues << issue
+	end
+
+	def add(row)
+		@rows << row
+		@month += 1
+	end
+
+	def prune_columns(columns)
+		columns.each do |c|
+			n = @title[1].index(c)
+			@title[1].delete_at(n)
+			@title[0][-1][:colspan] -= 1
+			@rows.each do |r|
+				date_sum_offset = 2
+				r.delete_at(date_sum_offset + n)
+			end
+		end
+	end
+
+	def add_interscan(row)
+		@irows << row
+	end
+
+	def add_paloalto(row)
+		@paloalto = row
+	end
+
+	def render
+		pdf = Prawn::Document.new(@options)
+		pdf.font "#{@path}/vendor/fonts/ipaexg.ttf", size: 10
+
+		#
+		year = "#{@fiscal_year}年度"
+		now = "(#{Time.now.strftime('%Y/%m/%d')}現在)"
+
+		#
+		pdf.text "#{year} インシデント月別対応数 #{now}", size: 18
+
+		pdf.move_down 10
+
+		y = pdf.cursor
+		pdf.table(@title + @rows, header: true,
+		    cell_style: { align: :center, valign: :center },
+		    row_colors: [ 'ffffff', 'eeeeee' ],
+		    column_widths: 45,
+		    ) {
+			column(0).width = 30
+		}
+
+		pdf.move_down 10
+		pdf.text '・括弧内は非インシデントと判断したセキュリティイベントも含めた総数'
+#		pdf.text '・研究室のインシデントで利用者名の報告がない場合は教職員でカウントしている'
+
+		pdf.start_new_page
+		pdf.text "#{year} インシデント対策統計 (メール) #{now}",
+		    inline_format: true, size: 18
+		pdf.move_down 10
+		rows = @irows.unshift(@ititle)
+		pdf.table(rows, header: true,
+		    cell_style: { align: :center, valign: :center },
+		    row_colors: [ 'eeeeee', 'ffffff' ],
+		    column_widths: 60,
+		    ) {
+			column(0).width = 30
+			column(1).width = 60
+		}
+
+		pdf.move_down 10
+		pdf.text '・2016/10/01より，全学的な不審メールの隔離開始'
+		pdf.text '・2016/08/29より実行形式ファイル削除開始'
+		pdf.text '・2017/11/01より，メールの各件数は，外部メールサーバからのDATAコマンド数から，宛先メールアドレス毎の集計に変更'
+		pdf.text '・2017/07/07より，ウイルス駆除件数とマクロ削除件数を別々に集計する様に変更'
+
+		pdf.start_new_page
+		pdf.text "#{year} インシデント対策統計 (ファイアウォールによる通信遮断) #{now}",
+		    inline_format: true, size: 18
+		pdf.move_down 10
+		pdf.table(@paloalto, header: true,
+		    cell_style: { align: :center, valign: :center },
+		    row_colors: [ 'eeeeee', 'ffffff' ],
+		    column_widths: 70,
+		    ) {
+			column(0).width = 30
+		}
+		pdf.move_down 10
+		pdf.text '・2017年8月にネットワークリプレースを実施し，9月より運用開始'
+		pdf.text '・括弧内は遮断しなかった通信数'
+		pdf.text '・drop: 一般的なルールで通信を許可していない通信 (既存のファイアウォールでも遮断していた通信)'
+		pdf.text '・data: OLEオブジェクトを含むマルウェアの可能性のあるファイルなど（鳥取大学での独自判定，正常なファイルも多いため遮断は未実施)'
+		pdf.text '・file: 送受信されたファイル (メールの添付も含む)'
+		pdf.text '・spyware: スパイウェア'
+		pdf.text '・url: Webページへのリンク'
+		pdf.text '・virus: ウイルスの疑いがあるファイルやデータ'
+		pdf.text '・vulnerability: 脆弱性への攻撃の試行'
+
+		#
+		pdf.start_new_page
+		pdf.text "#{year} インシデント対応一覧 #{now} (<color rgb='dddddd'>■</color>は非インシデント)",
+		    inline_format: true, size: 18
+		pdf.move_down 10
+
+		incident_columns = [
+		    :id,
+		    :created_on,
+		    :detection,
+		    :threat,
+		    :subject,
+		    :status,
+		    :department,
+		    :division,
+		    :network,
+		    :media,
+		    :usertype,
+		    :confidential,
+		    :plain,
+		    :breach,
+		    :malware,
+		    :malwaretype,
+		    :abstract
+		    ]
+		rows = []
+		rows << incident_columns.map do |key|
+			case key
+			when :created_on
+				name = '認知 時刻'
+			else
+				name = Issue::KEYS[key]
+			end
+			{
+			    content:	name,
+			    align:	:center,
+			    valign:	:center,
+			}
+		end
+		@issues.sort.each do |issue|
+			if issue.incident?
+				color = 'ffffff'
+			else
+				color = 'dddddd'
+			end
+			rows << incident_columns.map do |key|
+				v = issue[key]
+				case key
+				when :status
+					v = '完了' if issue.done?
+				when :created_on
+					t = Time.parse(v) + 9 * 60 * 60
+					v = t.strftime("%m/%d %H:%M")
+				end
+				if key === :abstract
+					align = :left
+				else
+					align = :center
+				end
+				{
+				    content:	v.to_s,
+				    background_color: color,
+				    align:	align,
+				    valign:	:center,
+				}
+			end
+		end
+		pdf.table(rows, header: true) {
+			row(0).background_color = 'aaaaaa'
+			column(incident_columns.index(:id)).width = 30
+			column(incident_columns.index(:created_on)).width = 40
+			column(incident_columns.index(:status)).width = 30
+			column(incident_columns.index(:detection)).width = 40
+			column(incident_columns.index(:threat)).width = 40
+			column(incident_columns.index(:subject)).width = 80
+			column(incident_columns.index(:usertype)).width = 20
+			column(incident_columns.index(:confidential)).width = 20
+			column(incident_columns.index(:plain)).width = 20
+			column(incident_columns.index(:breach)).width = 20
+			column(incident_columns.index(:network)).width = 20
+			column(incident_columns.index(:media)).width = 20
+		}
+
+		pdf.number_pages "<page> / <total>", {
+		    #start_count_at:  1,
+		    #page_filter: lambda{ |pg| pg != 1 },
+		    at: [ pdf.bounds.right - 50, 0 ],
+		    align: :right,
+		    size: 8,
+		    }
+		pdf.number_pages "#{Time.now.strftime('%Y/%m/%d %H:%M:%S')}", {
+		    at: [ pdf.bounds.left, 0 ],
+		    align: :left,
+		    size: 8,
+		    }
+
+		dirname = File.dirname(__FILE__) + '/../report'
+		dirname = File.absolute_path(dirname) + '/'
+		@filename = dirname +
+		    "report-incident-#{Time.now.strftime('%Y%m%d-%H%M%S')}.pdf"
+		pdf.render_file(@filename)
+	end
+
+	def mail
+		month = (Time.now.month + MONTH_MAX - 1) % MONTH_MAX
+		month = 12 if month === 0
+		options = { month: month }
+		m = TemplateMailer.new(REPORT_SMTP_SERVER, REPORT_TEMPLATE, 
+		    options)
+		m.attach(@filename)
+		m.mail
+	end
+end
+
+#
+redmine = Redmine::API.new
+#
+file = File.dirname(__FILE__) + '/../db/' + 'interscan.csv'
+file = File.expand_path(file)
+interscans = {}
+ititle = nil
+CSV.foreach(file, headers: true) do |row|
+	hash = row.to_hash
+	if ! ititle
+		ititle = hash.keys.map { |k| k.strip }
+		ititle.delete_at(0)
+		IMSVA_MAXCOLS = ititle.size
+		ititle.unshift('月')
+	end
+	date = Time.parse(hash.values[0])
+	values = hash.values.map { |v| v.nil? ? '-' : v.to_i }
+	values.delete_at(0)
+	interscans[date] = values
+end
+interscan_total = [ 0 ] * IMSVA_MAXCOLS
+interscan_total.unshift('合計')
+#
+title = [ [
+    { content: '月', rowspan: 2 },
+    { content: '合計', rowspan: 2 },
+    { content: Issue::KEYS[:usertype],
+      colspan: redmine.get_custom_field_possible_values(Issue::KEYS[:usertype]).size },
+    { content: Issue::KEYS[:confidential],
+      colspan: redmine.get_custom_field_possible_values(Issue::KEYS[:confidential]).size },
+    { content: Issue::KEYS[:threat], colspan:
+      redmine.get_custom_field_possible_values(Issue::KEYS[:threat]).size },
+    ] ]
+columns = []
+keys = {}
+[ :usertype, :confidential, :threat ].each do |k|
+	keys[k] = []
+	redmine.get_custom_field_possible_values(Issue::KEYS[k]).each do |v|
+		keys[k] << v['label']
+	end
+end
+columns += keys[:usertype] + keys[:confidential] + keys[:threat]
+title << columns
+report = IncidentReport.new(title, ititle)
+
+totals = { incident: {}, event: {} }
+totals[:incident]['合計'] = 0
+totals[:event]['合計'] = 0
+for i in 1..12
+	stats = {}
+	incidents = {}
+	issues = redmine.get_issues(
+	    "status_id=*&created_on=><#{report.start_date}|#{report.end_date}")
+	issues['issues'].each do |values|
+		issue = Issue.new(redmine)
+		issue.set(values)
+		report.add_issue(issue)
+		threat = issue[:threat]
+		if ! stats[threat]
+			stats[threat] = 0
+			incidents[threat] = 0
+		end
+		stats[threat] += 1
+		incidents[threat] += 1 if issue.incident?
+		#
+		def add(stats, incidents, key, issue)
+			c = stats[key].to_i + 1
+			i = incidents[key].to_i
+			i += 1 if issue.incident?
+			return c, i
+		end
+		#
+		key = issue[:usertype]
+		case key
+		when Issue::Values::USERTYPE[:staff],
+		     Issue::Values::USERTYPE[:student]
+		else
+			key = Issue::Values::USERTYPE[:other]
+		end
+		stats[key], incidents[key] = add(stats, incidents, key, issue)
+		#
+		yes = Issue::Values::CONFIDENTIAL[:yes]
+		confidential = issue[:confidential]
+		if confidential == yes
+			key = yes
+		else
+			key = Issue::Values::CONFIDENTIAL[:no]
+		end
+		stats[key], incidents[key] = add(stats, incidents, key, issue)
+	end
+	row = []
+	incident_count = 0
+	[ :usertype, :confidential, :threat ].each do |field|
+		keys[field].each do |key|
+			i = incidents[key].to_i
+			c = stats[key].to_i
+			if ! totals[:incident].has_key?(key)
+				totals[:incident][key] = 0
+				totals[:event][key] = 0
+			end
+			totals[:incident][key] += i
+			totals[:event][key] += c
+			if keys[:threat].include?(key)
+				incident_count += i
+			end
+			if c > 0
+				row << "#{i} (#{c})"
+			else
+				row << ''
+			end
+		end
+	end
+
+	interscan = interscans[Time.new(report.year, report.month)]
+	if ! interscan
+		interscan = [ '-' ] * IMSVA_MAXCOLS
+	else
+		for i in 1..IMSVA_MAXCOLS do i
+			interscan_total[i] += interscan[i - 1].to_i
+		end
+	end
+	report.add_interscan(interscan.unshift(report.month))
+
+	row.unshift("#{incident_count} (#{issues['total_count']})")
+	row.unshift(report.month)
+	report.add(row)
+	totals[:incident]['合計'] += incident_count
+	totals[:event]['合計'] += issues['total_count']
+end
+row = [ '合計' ]
+empty_columns = []
+[ '合計', :usertype, :confidential, :threat ].each do |field|
+	if field.is_a?(String)
+		fieldkeys = [ field ]
+	else
+		fieldkeys = keys[field]
+	end
+	fieldkeys.each do |key|
+		if  totals[:event][key] === 0 && keys[:threat].include?(key)
+			empty_columns << key
+		end
+		row << "#{totals[:incident][key]} (#{totals[:event][key]})"
+	end
+end
+report.add(row)
+report.prune_columns(empty_columns)
+report.add_interscan(interscan_total)
+
+file = File.dirname(__FILE__) + '/../db/' + 'paloalto.csv'
+file = File.expand_path(file)
+paloalto = {}
+types = []
+typeshash = {}
+CSV.foreach(file, headers: false) do |row|
+	date = Time.parse(row[0])
+	type = row[1]
+	application = row[2]
+	action = row[3]
+	count = row[4].to_i
+	case type
+	when 'end'
+		next
+	when 'deny'
+		type = 'drop'
+	end
+	case action
+	when 'allow', 'alert'
+		key = :allow
+	else
+		key = :deny
+	end
+	if ! paloalto.has_key?(date)
+		paloalto[date] = {}
+	end
+	if ! paloalto[date].has_key?(type)
+		paloalto[date][type] = { allow: 0, deny: 0 }
+	end
+	paloalto[date][type][key] += count
+	if ! typeshash.has_key?(type)
+		types <<= type
+		typeshash[type] = true
+	end
+end
+pcells = [ [ '月' ] + types ]
+yearbegin = report.fiscal_year
+monthbegin = IncidentReport::FISCAL_YEAR_MONTH
+for offset in 0..11
+	year = yearbegin
+	month = monthbegin + offset
+	if month > IncidentReport::MONTH_MAX
+		year += 1
+		month = month % IncidentReport::MONTH_MAX
+	end
+	date = Time.parse("#{year}/#{month}")
+	if ! paloalto.has_key?(date)
+		paloalto[date] = {}
+	end
+	row = []
+	row.push(month)
+	for type in types
+		if ! paloalto[date].has_key?(type)
+			row.push(nil)
+		else
+			row.push("#{paloalto[date][type][:deny]} " +
+			    "(#{paloalto[date][type][:allow]})")
+		end
+	end
+	pcells.push(row)
+end
+report.add_paloalto(pcells)
+
+report.render
+
+report.mail

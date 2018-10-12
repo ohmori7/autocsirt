@@ -1,0 +1,9 @@
+From: hogehoge@hogehoge
+Subject: セキュリティインシデント%%MONTH%%月レポート
+To: hogehoge@hogehoge
+
+各位，
+
+%%MONTH%%月のインシデントレポートを送付しますので，御査収下さい．
+
+以上，よろしくお願いします．

@@ -1,0 +1,200 @@
+#!/usr/bin/env ruby
+# -*- encoding: utf-8 -*-
+
+$:.unshift (File.dirname(File.realpath(__FILE__)) + '/../').untaint
+
+Encoding.default_external = 'utf-8'
+
+################################################################################
+$progname = File.basename(__FILE__)
+
+def usage(errmsg = nil)
+	puts "ERROR: #{errmsg}" if errmsg
+	puts <<~EOF
+	Usage:
+		#{$progname} [-d]
+	Description:
+		check and parse a mail from SOC sevices, and register
+		a ticket on Incident Tracking System (ITS) using Redmine.
+	Argument:
+		-h:	output this help message.
+		-d:	test run mode to use a Redmine in test environment.
+			do not isolate a suspicious host, and do not send an
+			alert mail in production environment.
+	EOF
+	exit 1
+end
+
+usage if ! ARGV.size.between?(0, 1)
+case ARGV[0]
+when '-d'
+	DEBUG = true
+	ARGV.shift
+when nil
+	DEBUG = false
+else
+	usage
+end
+
+################################################################################
+require 'config/config'
+
+require 'lib/imap'
+require 'lib/soc'
+require 'lib/locate'
+require 'lib/confine'
+require 'lib/alert'
+require 'lib/iptable'
+require 'lib/issue.rb'
+
+socs = {}
+criteria = []
+SOCS.each do |vendor, mailaddr|
+	socs[mailaddr] = SOC.const_get(vendor.upcase).new(mailaddr)
+	criteria.unshift(mailaddr)
+	criteria.unshift('FROM')
+	criteria.unshift('OR') if criteria.size > 2
+end
+criteria << 'UNSEEN'
+
+imap = IMAP.new(IMAP_HOST, IMAP_USERNAME, IMAP_PASSWORD, criteria, IMAP_SSL)
+
+def iptable_lookup(options)
+	iptable = IPTable.new
+	ia = options[:ia]
+	if ia.nil?
+		ia = options[:global_ia]
+	end
+	r = iptable.lookup(ia)
+	options[:media] = r.media
+	options[:network] = r.type.name
+	options[:department] = "#{r.contact}"
+	options[:division] = r.division
+	options[:section] = r.section
+	options[:header] = options[:department]
+	return r
+end
+
+def host_confine(r, options, issue)
+	ia = options[:ia]
+	starttime = options[:starttime]
+	if defined?(OVERRIDE_IP_ADDRESS)
+		ia = OVERRIDE_IP_ADDRESS
+		starttime = Time.now
+	end
+
+	# do nothing if an internal IP address is not resolved.
+	return if ia.nil?
+
+	locate = Locate::Locate.new(r.type.locate.capitalize, ia, starttime)
+	locate.locate
+	if locate.located?
+		options[:ma] = issue[:ma] = locate.ma
+		output = locate.output
+	else
+		output = "failed to locate a host: #{ia}\n#{locate.output}\n"
+		puts "ERROR: \##{issue.id}: #{output}"
+	end
+	issue.update("```\n#{output}```")
+
+	if locate.located? && ! options.has_key?(:confinement)
+		confined, output = Confine::confine(options[:id],
+		    locate, r.type.confine)
+		if confined
+			issue[:confinement] =
+			    Issue::Values::CONFINEMENT[r.type.confine.to_sym]
+		else
+			issue[:confinement] = Issue::Values::CONFINEMENT[:none]
+			puts "ERROR: \##{issue.id}: failed to confine: " +
+			    "#{output}"
+		end
+		issue.update("```\n#{output}```")
+	end
+
+	if locate.userid
+		issue[:userid] = locate.userid
+		# XXX: should be configurable...
+		if locate.userid =~ /^[0-9]/
+			issue[:usertype] = Issue::Values::USERTYPE[:staff]
+		else
+			issue[:usertype] = Issue::Values::USERTYPE[:student]
+		end
+		issue.update
+	end
+end
+
+def process(options)
+	# shallow copy to hold original values
+	options = options.dup
+
+	r = iptable_lookup(options)
+	#
+	# XXX: should look up an internal IP address if an given IP address
+	#      is a global IP address.
+	#
+	if r.contact && ! r.contact.mailaddrs.empty?
+		options[:to] = r.contact.mailaddrs.join(', ')
+	end
+	if ! options.has_key?(:to)
+		options[:header] = "No Point of Contact (PoC) found" +
+		    " for \"#{options[:ia]}\"!!!"
+	end
+
+	issue = Issue.new
+	issue.create(options)
+	options[:id] = issue.id
+
+	puts "INCIDENT: \##{issue.id} " +
+	    "#{options[:detection]} \##{options[:socticketid]}:" +
+	    "#{options[:subject]}: #{options[:global_ia]} (#{options[:ia]}) " +
+	    "#{options[:network]} #{options[:media]} #{options[:department]} " +
+	    "#{options[:division]} #{options[:section]}"
+
+	host_confine(r, options, issue)
+
+	if ! options.has_key?(:confinement)
+		alert = Alert.new(options)
+		mail = alert.mail
+		issue.update("```\n#{mail}```")
+	end
+
+	issue[:status] = Issue::Values::STATUS[:identifying]
+	issue[:isolation] = Issue::Values::ISOLATION[:identifying]
+	issue.update
+end
+
+imap.gets do |message|
+	uid = message['uid']
+	date = message['date'].strftime('%Y/%m/%d %T')
+	from = message['from'].split(':')[1].strip.delete('<>')
+	subject = message['subject']
+	body = message['body']
+
+	next if ! socs.has_key?(from)
+	next if subject =~ /^RE:/i
+	soc = socs[from]
+
+	options = {}
+	options[:debug] = ''
+	options[:debug] = SUBJECT_PREFIX if defined?(SUBJECT_PREFIX)
+	options[:detection] = soc.name
+	options[:socdate] = date
+
+	options[:description]  = "```\n"
+	options[:description] += "Date: #{date}\n"
+	options[:description] += "#{message['from']}\n"
+	options[:description] += "#{message['to']}\n"
+	options[:description] += "#{message['cc']}\n" if message['cc']
+	options[:description] += "Subject: #{message['subject']}\n"
+	options[:description] += "#{message['message-id']}\n"
+	options[:description] += "\n#{body.strip}\n"
+	options[:description] += '```'
+
+	next if ! soc.parse(options, subject, body)
+	ias = options[:ia]
+	ias = [ ias ] if ! ias.is_a?(Array)
+	ias.each do |ia|
+		options[:ia] = ia
+		process(options)
+	end
+end

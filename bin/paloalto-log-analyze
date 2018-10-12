@@ -1,0 +1,57 @@
+#!/usr/bin/env ruby
+# -*- encoding: utf-8 -*-
+
+$:.unshift (File.dirname(File.realpath(__FILE__)) + '/../').untaint
+
+require 'csv'
+require 'config/config'
+require 'lib/iptable'
+require 'lib/locate'
+
+departments = {}
+lines = 0
+
+iptable = IPTable.new
+
+CSV.foreach(ARGV[0]) do |row|
+	if lines === 0
+		d = 'Department'
+		div = 'Devision'
+		section = 'Section'
+		uid = 'User'
+	else
+		starttime = Time.parse(row[1])
+		ia = row[7]
+	        r = iptable.lookup(ia)
+		div = r.division
+		section = r.section
+		d = r.contact
+		if ! departments.has_key?(d)
+			departments[d] = {}
+		end
+		departments[d][ia] = "#{div} #{section}"
+		if d && d.name === '総合メディア基盤センター' &&
+		   r.media === '無線'
+			l = Locate::Locate.new(r.type.locate.capitalize, ia, starttime)
+			l.locate
+			uid = l.userid
+		end
+	end
+	csv = [35, 1, 7, 24, 8, 25].collect do |c|
+		row[c]
+	end
+	csv.push(d)
+	csv.push(div)
+	csv.push(section)
+	csv.push(uid)
+	puts csv.join(',')
+	lines += 1
+end
+
+puts ''
+departments.each do |k, v|
+	puts "#{k}:"
+	v.each do |ia, div|
+		puts "#{ia} #{div}"
+	end
+end

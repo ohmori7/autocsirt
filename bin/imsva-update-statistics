@@ -1,0 +1,100 @@
+#!/usr/bin/env ruby
+# -*- encoding: utf-8 -*-
+
+$:.unshift (File.dirname(File.realpath(__FILE__)) + '/../').untaint
+Encoding.default_external = 'utf-8'
+
+$progname = File.basename(__FILE__)
+
+require 'mongo'
+require 'csv'
+
+def usage(errmsg = nil)
+	puts "ERROR: #{errmsg}" if errmsg
+	puts <<~EOF
+	Usage:
+		#{$progname} <CSV file>
+	Description:
+		update TrendMicro InterScan statistics file.
+	EOF
+	exit 1
+end
+
+usage('no file specified') if ARGV.size != 1
+file = ARGV[0]
+
+#
+Mongo::Logger.logger.level = Logger::INFO
+
+mc = Mongo::Client.new(
+    'mongodb://mongo.center.tottori-u.ac.jp/imsva',
+    user: IMSVA_USER, password: IMSVA_PASSSWD)
+
+fields = {
+	Date:			'年月',
+	GlobalVirusRule:	'ウイルス駆除件数',
+	DeletedMacro:		'マクロ削除件数',
+	ExecAttachDelRule:	'実行形式ファイル等の削除件数',
+	DetectOfficeRule:	'不審メールの自動隔離件数',
+	SPFOfficeBypass:	'SPFバイパス数',
+	SPFOfficeBlock:		'SPFブロック数',
+	Message:		'メール総数',
+}
+
+#
+now = Time.now
+startyear = year = now.year
+startmonth = month = now.month
+if startmonth === 1
+	startyear -= 1
+	startmonth = 12
+else
+	startmonth -= 1
+end
+starttime = Time.new(startyear, startmonth)
+endtime   = Time.new(year, month)
+
+def count_mail_destinations(values, field, log)
+	field = :Message if field === nil
+	field = field.to_sym
+	values[field] = 0 if values[field] === nil
+
+	# some records of ``msgtra'' have no dst-email.
+	if log.has_key?('dst-email')
+		values[field] += log['dst-email'].count('@')
+	else
+		values[field] += 1
+	end
+end
+
+values = {}
+values[:Date] = starttime.strftime('%Y/%m')
+[ :msgtra, :policy ].each do |collection|
+	c = mc[collection]
+	c.find(time: { '$gte': starttime, '$lt': endtime }).each do |log|
+		#  XXX: i know it's slow, but flexbile against rule name change
+		field = log[:rule]
+		count_mail_destinations(values, field, log)
+		if field.to_s === 'GlobalVirusRule' &&
+		   log['mal-name'] =~ /^GenericMac/
+			count_mail_destinations(values, :DeletedMacro, log)
+		end
+	end
+end
+
+if values[:GlobalVirusRule] && values[:DeletedMacro]
+	values[:GlobalVirusRule] -= values[:DeletedMacro]
+end
+
+columns = []
+CSV.open(file, 'r') do |csv|
+	csv.gets.each do |c|
+		columns << fields.invert[c]
+	end
+end
+
+File.open(file, 'a') do |f|
+	f.puts columns.map { |c| values[c] }.join(',')
+end
+
+puts "Output IMSVA statistics on #{values[:Date]} to #{file}."

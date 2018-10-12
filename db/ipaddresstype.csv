@@ -1,0 +1,11 @@
+type,media,locate,confine
+研究,有線,wired,port_shutdown
+研究,無線,wireless,acl_mac_core
+事務,有線,wired,port_shutdown
+教育,有線,wired,acl_mac_core
+教育,無線,wireless,acl_mac_core
+医療,有線,wired,port_shutdown
+ゲスト,有線,wired,acl_mac_core
+ゲスト,無線,wireless,acl_mac_core
+その他,有線,wired,port_shutdown
+その他,無線,wireless,acl_mac_core

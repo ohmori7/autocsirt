@@ -1,0 +1,52 @@
+#!/usr/bin/env ruby
+# -*- encoding: utf-8 -*-
+
+$:.unshift(File.dirname(File.realpath(__FILE__)) + '/../').untaint
+
+Encoding.default_external = 'utf-8'
+
+require 'date'
+require 'open3'
+
+$progname = File.basename(__FILE__)
+
+GREP = 'ssh -i ~/.ssh/syslog syslog grep'
+FILE = '/var/log/backup/firewall/paloalto.log'
+
+def usage(errmsg = nil)
+	puts "ERROR: #{errmsg}" if errmsg
+	puts <<~EOF
+	Usage:
+		#{$progname} [<date>] <CSV file>
+	Description:
+		update Paloalto statistics file.
+	EOF
+	exit 1
+end
+
+case ARGV.size
+when 1
+	date = Date.today
+	date = Date.new(date.year, date.month) << 1
+when 2
+	date = Date.parse(ARGV.shift)
+	date = Date.new(date.year, date.month)
+else
+	usage
+end
+file = ARGV.shift
+
+amonth = date.strftime('%b')
+suffix = date.strftime('%Y%m*')
+psuffix = (date - 1).strftime('%Y%m%d')
+
+[ 'TRAFFIC', 'THREAT' ].each do |type|
+	Open3.popen3("#{GREP} -e \'^#{amonth}.*#{type}\' #{FILE}.{#{psuffix},#{suffix}} | cut -d',' -f 5,15,31 | sort | uniq -c") do |input, output, error, status|
+		File.open(file, 'a') do |f|
+			output.each do |l|
+				v = l.strip.split(' ')
+				f.puts "#{date.year}/#{date.month},#{v[1]},#{v[0]}"
+			end
+		end
+	end
+end

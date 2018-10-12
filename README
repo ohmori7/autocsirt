@@ -1,0 +1,5 @@
+gem prawn-table install
+
+TODO
+* configuration separation
+* make Redmine items configurable
