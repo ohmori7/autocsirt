@@ -5,7 +5,7 @@ require 'lib/locate/ondemand'
 module Locate
 
 path = File.expand_path(File.dirname(__FILE__))
-PATH = File.join(path, '/../../../switch/bin/')
+PATH = File.join(path, '/../../netutils/bin/')
 
 class Locate
 	attr_reader :ia, :time, :ma, :nas, :nasia, :nasport, :starttime,

@@ -7,7 +7,7 @@ require 'lib/confine/acl-mac-core'
 module Confine
 #
 path = File.expand_path(File.dirname(__FILE__))
-PATH = File.join(path, '/../../../switch/bin/')
+PATH = File.join(path, '/../../netutils/bin/')
 #
 if defined?(CONFINEMENT_DRY_RUN)
 	OPTION = ' -d'
