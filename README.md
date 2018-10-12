@@ -1,7 +1,7 @@
 # Orchestration and Automation of Initial Computer Security Incident Response
 
 ## Overview
-In order to avoid data breach, a quick and proper response against an computer security incident is important.
+In order to avoid data breach, a quick and proper response against a computer security incident is important.
 To this end, we have implemented the system, *autocsirt*, that orchestrates and automates an initial incident response.
 The autocsirt has functions such as:
 * check and parse a mail from a Security Operation Center (SOC)
