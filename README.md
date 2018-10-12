@@ -23,7 +23,7 @@ Custom fields listed in `lib/issue.rb` should be created in Redmine.
 
 ### Ruby
 You have to install ruby version 1.9.x or later using rbenv.
-Note that a separated tool called `netutils` should be installed as well.
+Note that a tool called `netutils` that we have separatedly implemented should be installed as well.
 
 ```
 % gem prawn-table install
